@@ -98,7 +98,7 @@ export default function App() {
   // --- LLAMADA API GEMINI ---
   const callGeminiAPI = async (prompt, systemInstruction = "Eres un consultor experto en experiencia del cliente.") => {
     // ⚠️ ATENCIÓN: Pega tu API Key de Google aquí para que funcione en tu web real
-    const apiKey = ""; 
+    const apiKey = "AIzaSyBWunxSr8BBW3xicAlAXw_HCKAY5bTMddY"; 
     
     if (!apiKey) return "⚠️ Falta la API Key de Gemini. Debes generar una en Google AI Studio y colocarla en el código.";
 
