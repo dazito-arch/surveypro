@@ -110,20 +110,30 @@ export default function App() {
 
   // --- LLAMADA API GEMINI CON REINTENTOS Y BACKOFF EXPONENCIAL ---
   const callGeminiAPI = async (prompt, systemInstruction = "Eres un consultor experto en experiencia del cliente.") => {
-    const apiKey = "AIzaSyBWunxSr8BBW3xicAlAXw_HCKAY5bTMddY"; // API Key proveída por el entorno
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    // ⚠️ REEMPLAZA ESTO CON TU API KEY REAL ANTES DE SUBIR A GITHUB (Ej: "AIzaSy...")
+    const apiKey = "AIzaSyBWunxSr8BBW3xicAlAXw_HCKAY5bTMddY"; 
+    
+    // CORRECCIÓN: El modelo 'gemini-2.5-flash-preview' es exclusivo de este entorno de pruebas. 
+    // Para el sitio publicado con tu propia clave, usamos el modelo público 'gemini-1.5-flash'.
+    const modelName = apiKey ? "gemini-1.5-flash" : "gemini-2.5-flash-preview-09-2025";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
     const payload = { 
       contents: [{ parts: [{ text: prompt }] }], 
       systemInstruction: { parts: [{ text: systemInstruction }] } 
     };
     
-    const delays = [1000, 2000, 4000, 8000, 16000];
+    const delays = [1000, 2000, 4000];
 
     for (let i = 0; i <= delays.length; i++) {
       try {
         const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          console.error("Error detallado de Gemini:", errorData);
+          throw new Error(`API Error: ${response.status}`);
+        }
         
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -132,8 +142,9 @@ export default function App() {
         throw new Error('Respuesta vacía de la API');
       } catch (err) {
         if (i === delays.length) {
-          console.error("Gemini API Error tras reintentos:", err);
-          return null;
+          console.error("Gemini API Error definitivo:", err);
+          // Retornamos null para que la UI sepa que falló y detenga el loading
+          return null; 
         }
         await new Promise(res => setTimeout(res, delays[i]));
       }
