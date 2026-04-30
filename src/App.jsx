@@ -108,22 +108,21 @@ export default function App() {
     return false;
   };
 
-  // --- LLAMADA API GEMINI CON REINTENTOS Y BACKOFF EXPONENCIAL ---
+  // --- LLAMADA API GEMINI ---
   const callGeminiAPI = async (prompt, systemInstruction = "Eres un consultor experto en experiencia del cliente.") => {
-    // ⚠️ REEMPLAZA ESTO CON TU API KEY REAL ANTES DE SUBIR A GITHUB (Ej: "AIzaSy...")
     const apiKey = "AIzaSyBWunxSr8BBW3xicAlAXw_HCKAY5bTMddY"; 
+    const keyToUse = apiKey.trim();
     
-    // CORRECCIÓN: El modelo 'gemini-2.5-flash-preview' es exclusivo de este entorno de pruebas. 
-    // Para el sitio publicado con tu propia clave, usamos el modelo público 'gemini-1.5-flash'.
-    const modelName = apiKey ? "gemini-1.5-flash" : "gemini-2.5-flash-preview-09-2025";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const modelName = keyToUse ? "gemini-2.5-flash" : "gemini-2.5-flash-preview-09-2025";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${keyToUse}`;
     
     const payload = { 
       contents: [{ parts: [{ text: prompt }] }], 
       systemInstruction: { parts: [{ text: systemInstruction }] } 
     };
     
-    const delays = [1000, 2000, 4000];
+    const delays = [1000, 2000, 4000, 8000, 16000];
+    let lastError = "Error desconocido";
 
     for (let i = 0; i <= delays.length; i++) {
       try {
@@ -131,20 +130,19 @@ export default function App() {
         
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          console.error("Error detallado de Gemini:", errorData);
-          throw new Error(`API Error: ${response.status}`);
+          throw new Error(errorData.error?.message || `Error HTTP ${response.status}`);
         }
         
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         
         if (text) return text;
-        throw new Error('Respuesta vacía de la API');
+        throw new Error(`Respuesta bloqueada. Motivo: ${data.candidates?.[0]?.finishReason || 'Desconocido'}`);
       } catch (err) {
+        lastError = err.message;
         if (i === delays.length) {
           console.error("Gemini API Error definitivo:", err);
-          // Retornamos null para que la UI sepa que falló y detenga el loading
-          return null; 
+          return `⚠️ Error IA: ${lastError}`; 
         }
         await new Promise(res => setTimeout(res, delays[i]));
       }
@@ -218,7 +216,7 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2 md:gap-4 overflow-x-auto no-scrollbar">
               {!user || user.isAnonymous ? (
-                <button onClick={() => setRoute('login')} className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-700 transition-colors whitespace-nowrap">
+                <button onClick={() => setRoute('login')} className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg font-bold text-slate-700 transition-colors whitespace-nowrap">
                   <UserIcon className="w-4 h-4" /> Acceso Admin
                 </button>
               ) : (
@@ -331,7 +329,9 @@ function UserManager({ activeOwnerId, teamMembers, setRoute, appId }) {
     if (!newUserName.trim() || !newUserEmail.trim()) return;
     setIsSaving(true);
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'team_members'), { ownerId: activeOwnerId, name: newUserName.trim(), email: newUserEmail.trim(), role: newUserRole, createdAt: Date.now() });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'team_members'), {
+        ownerId: activeOwnerId, name: newUserName.trim(), email: newUserEmail.trim(), role: newUserRole, createdAt: Date.now()
+      });
       setNewUserName(''); setNewUserEmail('');
     } catch (err) { console.error(err); } finally { setIsSaving(false); }
   };
@@ -364,7 +364,7 @@ function UserManager({ activeOwnerId, teamMembers, setRoute, appId }) {
             </form>
           </div>
           <div className="bg-blue-600 p-8 rounded-[2.5rem] text-white shadow-xl">
-             <h3 className="font-black text-lg mb-4 flex items-center gap-2"><ShieldCheck className="w-6 h-6" /> {ROLES[newUserRole].label}</h3>
+             <h3 className="font-black text-lg mb-4 flex items-center gap-2"><ShieldCheck className="w-6 h-6" /> Permisos: {ROLES[newUserRole].label}</h3>
              <p className="text-blue-100 text-sm font-medium leading-relaxed">{ROLES[newUserRole].desc}</p>
           </div>
         </div>
@@ -505,10 +505,10 @@ function AdminDashboard({ user, teamMembers, can, campaigns, responses, companie
           <p className="text-slate-500 font-medium flex items-center gap-2">Control central de encuestas. {isCollaborator && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold uppercase">Modo Colaborador</span>}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {can('ADMIN') && <button onClick={() => setRoute('users')} className="px-5 py-3 bg-white border-2 border-slate-100 rounded-2xl font-black text-xs hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm"><Users className="w-4 h-4 text-blue-500" /> EQUIPO</button>}
-          {can('ADMIN') && <button onClick={() => setRoute('orgs')} className="px-5 py-3 bg-white border-2 border-slate-100 rounded-2xl font-black text-xs hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm"><Building2 className="w-4 h-4 text-blue-500" /> EMPRESAS</button>}
-          {can('VIEW_GLOBAL') && <button onClick={() => setRoute('globalStats')} className="px-5 py-3 bg-white border-2 border-slate-100 rounded-2xl font-black text-xs hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm"><BarChart3 className="w-4 h-4 text-blue-500" /> GLOBAL</button>}
-          {can('CREATE_CAMPAIGN') && <button onClick={() => { setEditingCampaign(null); setRoute('builder'); }} className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-black text-xs shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all flex items-center gap-2 active:scale-95"><Plus className="w-5 h-5" /> NUEVA ENCUESTA</button>}
+          {can('ADMIN') && <button onClick={() => setRoute('users')} className="px-5 py-3 bg-white border-2 border-slate-100 rounded-[1.5rem] font-black text-xs hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm"><Users className="w-4 h-4 text-blue-500" /> EQUIPO</button>}
+          {can('ADMIN') && <button onClick={() => setRoute('orgs')} className="px-5 py-3 bg-white border-2 border-slate-100 rounded-[1.5rem] font-black text-xs hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm"><Building2 className="w-4 h-4 text-blue-500" /> EMPRESAS</button>}
+          {can('VIEW_GLOBAL') && <button onClick={() => setRoute('globalStats')} className="px-5 py-3 bg-white border-2 border-slate-100 rounded-[1.5rem] font-black text-xs hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm"><BarChart3 className="w-4 h-4 text-blue-500" /> GLOBAL</button>}
+          {can('CREATE_CAMPAIGN') && <button onClick={() => { setEditingCampaign(null); setRoute('builder'); }} className="px-6 py-3 bg-blue-600 text-white rounded-[1.5rem] font-black text-xs shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all flex items-center gap-2 active:scale-95"><Plus className="w-5 h-5" /> NUEVA ENCUESTA</button>}
         </div>
       </div>
       
@@ -567,7 +567,7 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
   const [bgColor, setBgColor] = useState('#f8fafc');
   const [companyId, setCompanyId] = useState('');
   const [branchIds, setBranchIds] = useState([]);
-  const [questions, setQuestions] = useState([{ id: 'q_1', type: 'rating', title: '¿Cómo calificarías nuestro servicio hoy?' }]);
+  const [questions, setQuestions] = useState([{ id: `q_${Date.now()}`, type: 'rating', title: '¿Cómo calificarías nuestro servicio hoy?' }]);
   
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -584,7 +584,7 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
   }, [editingCampaign]);
 
   const addQuestion = (type) => {
-    const q = { id: `q_${Date.now()}`, type, title: 'Nueva pregunta...' };
+    const q = { id: `q_${Date.now()}_${Math.floor(Math.random()*1000)}`, type, title: 'Nueva pregunta...' };
     if (type === 'choice') q.options = ['Excelente', 'Bueno', 'Mejorable'];
     setQuestions([...questions, q]);
   };
@@ -611,6 +611,8 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
       
       const rawRes = await callGeminiAPI(prompt, "Eres un generador estricto de JSON para encuestas.");
       if (!rawRes) throw new Error("No hay respuesta de la IA.");
+
+      if (rawRes.includes("⚠️ Error IA:")) throw new Error(rawRes);
       
       const cleanJson = rawRes.replace(/```json/gi, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleanJson);
@@ -625,7 +627,7 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
       setAiPrompt('');
     } catch (e) {
       console.error(e);
-      setSaveError("Error al generar encuesta con IA. Verifica tu descripción e intenta de nuevo.");
+      setSaveError(e.message.includes("⚠️ Error IA:") ? e.message : "Error al generar encuesta con IA. Verifica tu descripción e intenta de nuevo.");
     } finally { setIsGeneratingAi(false); }
   };
 
@@ -634,9 +636,13 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
     if(!q.title) return;
     setImprovingIdx(idx);
     try {
-      const prompt = `Mejora la redacción de esta pregunta de encuesta para que suene mucho más profesional, clara y persuasiva: "${q.title}". No respondas con nada más que la pregunta mejorada. No uses comillas.`;
-      const res = await callGeminiAPI(prompt, "Eres un redactor experto UX.");
-      if(res) updateQuestion(idx, 'title', res.trim().replace(/^"|"$/g, ''));
+      const prompt = `Mejora la redacción de esta pregunta de encuesta para que suene mucho más profesional, clara y persuasiva: "${q.title}". No respondas con nada más que la pregunta mejorada. No uses comillas ni formato markdown.`;
+      const res = await callGeminiAPI(prompt, "Eres un redactor experto UX en español.");
+      if (res && !res.includes("⚠️ Error IA:")) {
+         updateQuestion(idx, 'title', res.trim().replace(/^"|"$/g, ''));
+      } else if (res && res.includes("⚠️ Error IA:")) {
+         alert(res); 
+      }
     } catch(e) { console.error(e); } finally { setImprovingIdx(null); }
   };
 
@@ -700,7 +706,6 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
 
       <p className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4 pl-4">Cuestionario</p>
       
-      {/* MAGIA IA - DRAFT GENERATOR */}
       <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-8 rounded-[2.5rem] border-2 border-indigo-100 mb-10 flex flex-col md:flex-row gap-6 items-center shadow-sm">
          <div className="flex-1 w-full">
            <label className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4 text-indigo-500" /> Borrador Mágico Gemini</label>
@@ -735,7 +740,6 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
               </div>
             )}
             
-            {/* Lógica Condicional (Oculta para simplificar UI a menos que se active) */}
             {idx > 0 && (
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
                 <label className="flex items-center gap-3 text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer mb-2"><input type="checkbox" checked={!!q.condition} onChange={e => { if(e.target.checked) { const n=[...questions]; n[idx].condition={dependsOnId:questions[idx-1].id, operator:'==', value:''}; setQuestions(n); } else { const n=[...questions]; delete n[idx].condition; setQuestions(n); } }} className="w-5 h-5 rounded-lg border-2 border-slate-200 text-blue-600" /> Mostrar esta pregunta bajo una condición (Lógica de Salto)</label>
@@ -751,7 +755,6 @@ function CampaignBuilder({ activeOwnerId, companies, setRoute, appId, editingCam
           </div>
         ))}
         
-        {/* Toolbar Flotante para añadir preguntas */}
         <div className="flex flex-wrap gap-4 justify-center p-6 bg-white/80 backdrop-blur shadow-sm rounded-[3rem] border border-slate-200 sticky bottom-32 z-40 w-fit mx-auto">
           <span className="w-full text-center text-[10px] font-black text-slate-400 uppercase tracking-widest block md:hidden">Agregar manual</span>
           <button onClick={() => addQuestion('rating')} className="px-6 py-3 bg-slate-50 rounded-2xl font-black text-xs text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition-all active:scale-95 flex items-center gap-2"><span>😡</span> RATING</button>
@@ -804,6 +807,10 @@ function SurveyRunner({ campaignId, branchId, campaigns, appId, setRoute, user, 
     }
   };
 
+  const resetSurvey = () => {
+    setAnswers({}); setCurrentStep(0); setIsFinished(false); setAiThanks('');
+  };
+
   const handleSubmit = async (finalAnswers) => {
     setIsSubmitting(true);
     try {
@@ -817,21 +824,27 @@ function SurveyRunner({ campaignId, branchId, campaigns, appId, setRoute, user, 
          callGeminiAPI(prompt, "Eres un sistema automático de atención al cliente.").then(res => { if(res) setAiThanks(res); setLoadingAi(false); });
       } else { setLoadingAi(false); }
 
-      setTimeout(() => { setAnswers({}); setCurrentStep(0); setIsFinished(false); setAiThanks(''); }, 10000);
+      // Ampliado a 25 segundos para lectura tranquila en modo kiosko
+      setTimeout(() => { if(isFinished) resetSurvey(); }, 25000);
     } catch (e) { console.error(e); } finally { setIsSubmitting(false); }
   };
 
   if (isFinished) return (
-    <div className="flex flex-col items-center justify-center h-screen p-6 text-center animate-in zoom-in-95 duration-500" style={{backgroundColor: campaign.bgColor}}>
+    <div className="flex flex-col items-center justify-center h-screen p-6 text-center animate-in zoom-in-95 duration-500 relative" style={{backgroundColor: campaign.bgColor}}>
       <div className="bg-white/90 backdrop-blur-xl p-16 rounded-[4rem] shadow-[0_30px_60px_rgba(0,0,0,0.1)] max-w-xl w-full border border-white/50 flex flex-col items-center">
         {campaign.logoUrl && <img src={campaign.logoUrl} className="w-32 h-32 object-contain mb-10 drop-shadow-xl" />}
         <div className="p-6 bg-green-100 rounded-full mb-10"><CheckCircle2 className="w-20 h-20 text-green-600" /></div>
         <h2 className="text-5xl font-black mb-8 text-slate-900 tracking-tighter uppercase">¡Gracias!</h2>
-        <div className="min-h-[80px] flex items-center justify-center w-full px-4">
+        <div className="min-h-[80px] flex items-center justify-center w-full px-4 mb-8">
           {loadingAi ? <div className="flex items-center gap-3 text-blue-500 font-bold animate-pulse"><Sparkles className="w-6 h-6"/> Creando mensaje...</div> : (
             <p className="text-slate-600 text-2xl font-medium italic leading-relaxed">{aiThanks || "Tu opinión es clave para seguir mejorando nuestro servicio."}</p>
           )}
         </div>
+        
+        {/* Botón manual para avanzar al siguiente cliente sin esperar los 25 segundos */}
+        <button onClick={resetSurvey} className="px-8 py-3 bg-white text-green-600 border-2 border-green-100 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-green-50 transition-colors shadow-sm">
+          Siguiente Cliente
+        </button>
       </div>
     </div>
   );
@@ -880,6 +893,11 @@ function SurveyRunner({ campaignId, branchId, campaigns, appId, setRoute, user, 
   );
 }
 
+// --- HELPER: Parse Markdown básico ---
+const renderMarkdown = (text) => {
+  return text.split('**').map((chunk, i) => i % 2 === 1 ? <strong key={i} className="text-indigo-950 font-black">{chunk}</strong> : chunk);
+};
+
 function StatsView({ campaignId, campaigns, responses, callGeminiAPI, setRoute }) {
   const campaign = campaigns.find(c => c.id === campaignId);
   const campResponses = responses.filter(r => r.campaignId === campaignId);
@@ -889,8 +907,25 @@ function StatsView({ campaignId, campaigns, responses, callGeminiAPI, setRoute }
 
   const handleGenerateAI = async () => {
     setIsGenerating(true);
-    const summary = campResponses.map(r => r.answers);
-    const prompt = `Actúa como Consultor Senior. Analiza las respuestas de la campaña "${campaign.title}": ${JSON.stringify(summary)}. Genera un reporte ejecutivo. Estructura: 1. Diagnóstico Principal (2 líneas). 2. Lo Positivo (puntos clave). 3. Áreas de Mejora Urgentes. 4. Tres acciones recomendadas directas. Responde en texto claro.`;
+    
+    // TRADUCCIÓN: Pasamos el título real de la pregunta en vez del ID ("q_1")
+    const formattedData = campResponses.map(r => {
+      let readableObj = {};
+      campaign.questions.forEach(q => {
+        if (r.answers[q.id] !== undefined) readableObj[q.title] = r.answers[q.id];
+      });
+      return readableObj;
+    });
+
+    const prompt = `Actúa como Consultor Senior en Experiencia del Cliente. 
+    Analiza las respuestas de la campaña "${campaign.title}": ${JSON.stringify(formattedData)}. 
+    Genera un reporte ejecutivo. Estructura recomendada: 
+    1. Diagnóstico Principal. 
+    2. Lo Positivo. 
+    3. Áreas de Mejora Urgentes. 
+    4. Tres acciones recomendadas directas. 
+    Usa formato Markdown básico con negritas (**) para resaltar lo importante. Responde en español de forma profesional.`;
+    
     const res = await callGeminiAPI(prompt);
     if (res) setAiInsight(res);
     setIsGenerating(false);
@@ -908,7 +943,9 @@ function StatsView({ campaignId, campaigns, responses, callGeminiAPI, setRoute }
       {aiInsight && (
         <div className="mb-12 p-10 bg-indigo-50 border-2 border-indigo-100 rounded-[3rem] shadow-sm animate-in slide-in-from-top-6">
           <div className="flex items-center gap-3 mb-6 text-indigo-900 font-black text-xl"><Bot className="w-8 h-8" /> ANÁLISIS DEL CONSULTOR IA</div>
-          <div className="prose prose-indigo max-w-none text-indigo-950 font-medium leading-relaxed whitespace-pre-wrap">{aiInsight}</div>
+          <div className="prose prose-indigo max-w-none text-indigo-900 font-medium leading-relaxed whitespace-pre-wrap text-lg">
+            {renderMarkdown(aiInsight)}
+          </div>
         </div>
       )}
       
@@ -968,8 +1005,33 @@ function GlobalStatsView({ campaigns, responses, callGeminiAPI, setRoute }) {
 
   const handleGenerateGlobalAI = async () => {
     setIsGenerating(true);
-    const summary = { encuestas_activas: campaigns.length, total_respuestas: responses.length, promedio_general: avg };
-    const prompt = `Actúa como CEO de la compañía. Basado en estos datos de alto nivel: ${JSON.stringify(summary)}, genera un pequeño discurso motivacional y 2 estrategias macro directas para el equipo directivo enfocadas en la experiencia del cliente.`;
+    
+    // Construimos un resumen profundo de TODAS las campañas con sus textos y notas reales
+    const allData = campaigns.map(camp => {
+      const cResps = responses.filter(r => r.campaignId === camp.id);
+      const formattedResps = cResps.map(r => {
+        let readableRes = {};
+        (camp.questions||[]).forEach(q => {
+          if (r.answers[q.id] !== undefined) readableRes[q.title] = r.answers[q.id];
+        });
+        return readableRes;
+      });
+      return {
+        campana: camp.title,
+        total_respuestas: cResps.length,
+        respuestas_detalladas: formattedResps
+      };
+    }).filter(c => c.total_respuestas > 0);
+
+    const summary = { encuestas_activas: campaigns.length, total_respuestas: responses.length, promedio_general: avg, detalle_por_campana: allData };
+    
+    const prompt = `Actúa como Consultor Estratégico Corporativo. Analiza el desempeño GLOBAL de la empresa basado en los datos de todas sus campañas de encuestas: ${JSON.stringify(summary)}.
+    Genera un reporte estratégico profundo que identifique:
+    1. Tendencias globales (lo que se hace bien en general vs problemas sistemáticos).
+    2. Comparativa (si aplica, qué campañas destacan positivamente o negativamente basándose en las respuestas).
+    3. 3 Estrategias macro directas para mejorar la satisfacción a nivel empresa.
+    Usa negritas (**) para resaltar puntos clave de forma clara.`;
+    
     const res = await callGeminiAPI(prompt);
     if (res) setAiInsight(res);
     setIsGenerating(false);
@@ -977,10 +1039,10 @@ function GlobalStatsView({ campaigns, responses, callGeminiAPI, setRoute }) {
 
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in pb-20">
-      <div className="flex items-center justify-between mb-12 gap-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-12 gap-6">
         <div className="flex items-center gap-6">
            <button onClick={() => setRoute('admin')} className="p-4 bg-white rounded-2xl shadow-sm border border-slate-200 hover:bg-slate-50 transition-all"><ChevronLeft className="w-8 h-8" /></button>
-           <div><h1 className="text-5xl font-black text-slate-900 tracking-tighter">Estadísticas Consolidadas</h1><p className="text-slate-400 font-black uppercase tracking-[0.2em] text-[10px] mt-1">Visión de Alto Nivel</p></div>
+           <div><h1 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tighter">Estadísticas Consolidadas</h1><p className="text-slate-400 font-black uppercase tracking-[0.2em] text-[10px] mt-1">Visión de Alto Nivel de la Organización</p></div>
         </div>
         <button onClick={handleGenerateGlobalAI} disabled={isGenerating || responses.length === 0} className="px-8 py-4 bg-slate-900 text-white rounded-[2rem] font-black text-sm shadow-xl hover:bg-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50">
            {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Bot className="w-5 h-5" />} VISIÓN ESTRATÉGICA IA
@@ -990,7 +1052,9 @@ function GlobalStatsView({ campaigns, responses, callGeminiAPI, setRoute }) {
       {aiInsight && (
         <div className="mb-12 p-10 bg-slate-900 text-slate-100 rounded-[3rem] shadow-xl animate-in slide-in-from-top-6">
           <div className="flex items-center gap-3 mb-6 text-white font-black text-xl"><Sparkles className="w-8 h-8 text-blue-400" /> ESTRATEGIA GLOBAL GEMINI</div>
-          <div className="prose prose-invert max-w-none font-medium leading-relaxed whitespace-pre-wrap">{aiInsight}</div>
+          <div className="prose prose-invert max-w-none font-medium leading-relaxed whitespace-pre-wrap text-lg">
+            {renderMarkdown(aiInsight)}
+          </div>
         </div>
       )}
 
