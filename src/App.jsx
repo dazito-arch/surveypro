@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { Settings, BarChart3, ChevronLeft, CheckCircle2, AlertCircle, Loader2, Sparkles, Bot, Plus, Trash2, ListPlus, Home, LogOut, User as UserIcon, Link as LinkIcon, Edit3 } from 'lucide-react';
+import { getAuth, signInAnonymously, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, signInWithCustomToken, sendPasswordResetEmail } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { Settings, BarChart3, ChevronLeft, CheckCircle2, AlertCircle, Loader2, Sparkles, Bot, Plus, Trash2, ListPlus, Home, LogOut, User as UserIcon, Link as LinkIcon, Edit3, Copy, Check, Eye, Building2, Store, Users, Image as ImageIcon, Palette } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 // Import the functions you need from the SDKs you need
@@ -41,12 +41,30 @@ const RATING_OPTIONS = [
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [route, setRoute] = useState('home'); // home | login | admin | builder | stats | survey
+  const [route, setRoute] = useState('home'); // home | login | admin | builder | stats | survey | globalStats | orgs | users
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [selectedBranchId, setSelectedBranchId] = useState(null); 
+  const [editingCampaign, setEditingCampaign] = useState(null); 
   
   // Datos Globales
   const [campaigns, setCampaigns] = useState([]);
   const [responses, setResponses] = useState([]);
+  const [companies, setCompanies] = useState([]); 
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [isCampaignsLoaded, setIsCampaignsLoaded] = useState(false);
+
+  // --- DETECTAR ENLACE PÚBLICO (URL) ---
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const surveyIdUrl = params.get('survey');
+    const branchIdUrl = params.get('branch');
+    
+    if (surveyIdUrl) {
+      setSelectedCampaignId(surveyIdUrl);
+      if (branchIdUrl) setSelectedBranchId(branchIdUrl);
+      setRoute('survey');
+    }
+  }, []);
 
   // --- INICIALIZACIÓN Y AUTH ---
   useEffect(() => {
@@ -55,7 +73,7 @@ export default function App() {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
-          await signInAnonymously(auth); // Inicio base para leer datos públicos
+          await signInAnonymously(auth);
         }
       } catch (err) {
         console.error("Error inicial de auth:", err);
@@ -74,27 +92,39 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     
-    // Cargar Campañas
+    const compsRef = collection(db, 'artifacts', appId, 'public', 'data', 'companies');
+    const unsubComps = onSnapshot(compsRef, (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setCompanies(data);
+    }, console.error);
+
     const campsRef = collection(db, 'artifacts', appId, 'public', 'data', 'campaigns');
     const unsubCamps = onSnapshot(campsRef, (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setCampaigns(data.sort((a, b) => b.createdAt - a.createdAt));
-    }, console.error);
+      setIsCampaignsLoaded(true);
+    }, (error) => {
+      console.error(error);
+      setIsCampaignsLoaded(true);
+    });
 
-    // Cargar Respuestas
     const respsRef = collection(db, 'artifacts', appId, 'public', 'data', 'responses');
     const unsubResps = onSnapshot(respsRef, (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setResponses(data);
     }, console.error);
 
+    const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'team_members');
+    const unsubUsers = onSnapshot(usersRef, (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setTeamMembers(data.sort((a, b) => b.createdAt - a.createdAt));
+    }, console.error);
+
     return () => {
-      unsubCamps();
-      unsubResps();
+      unsubComps(); unsubCamps(); unsubResps(); unsubUsers();
     };
   }, [user]);
 
-  // --- API GEMINI ---
   const callGeminiAPI = async (prompt) => {
     const apiKey = ""; 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
@@ -107,36 +137,31 @@ export default function App() {
       const data = await response.json();
       return data.candidates?.[0]?.content?.parts?.[0]?.text;
     } catch (e) {
-      console.error(e);
-      return null;
+      console.error(e); return null;
     }
   };
-
-  // --- COMPONENTES DE VISTA ---
 
   if (authLoading) return <div className="flex h-screen items-center justify-center"><Loader2 className="w-12 h-12 text-blue-500 animate-spin" /></div>;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-200">
-      {/* Navegación Superior (Solo visible fuera del modo encuesta pública) */}
       {route !== 'survey' && (
         <nav className="bg-white border-b border-slate-200 p-4 shadow-sm sticky top-0 z-10">
           <div className="max-w-6xl mx-auto flex justify-between items-center">
-            <button onClick={() => setRoute('home')} className="flex items-center gap-2 font-bold text-xl text-blue-600 hover:text-blue-700 transition-colors">
-              <CheckCircle2 className="w-6 h-6" />
-              <span>SurveyPro</span>
+            <button onClick={() => { window.history.pushState({}, '', window.location.pathname); setRoute('home'); }} className="flex items-center gap-2 font-bold text-xl text-blue-600 hover:text-blue-700 transition-colors">
+              <CheckCircle2 className="w-6 h-6" /> <span>SurveyPro</span>
             </button>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 md:gap-4 overflow-x-auto">
               {!user || user.isAnonymous ? (
                 <button onClick={() => setRoute('login')} className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium text-slate-700 transition-colors">
                   <UserIcon className="w-4 h-4" /> Acceso Admin
                 </button>
               ) : (
-                <div className="flex items-center gap-4">
-                  <button onClick={() => setRoute('admin')} className="font-medium text-slate-600 hover:text-blue-600">Mi Panel</button>
-                  <button onClick={() => { signOut(auth); setRoute('home'); }} className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors">
-                    <LogOut className="w-4 h-4" /> Salir
-                  </button>
+                <div className="flex items-center gap-2 md:gap-4">
+                  <button onClick={() => setRoute('users')} className="hidden md:flex items-center gap-1 font-medium text-slate-600 hover:text-blue-600 px-2 py-1 rounded-lg"><Users className="w-4 h-4" /> Usuarios</button>
+                  <button onClick={() => setRoute('orgs')} className="hidden md:flex items-center gap-1 font-medium text-slate-600 hover:text-blue-600 px-2 py-1 rounded-lg"><Building2 className="w-4 h-4" /> Empresas</button>
+                  <button onClick={() => setRoute('admin')} className="font-medium text-slate-600 hover:text-blue-600 px-2 py-1">Campañas</button>
+                  <button onClick={() => { signOut(auth); setRoute('home'); }} className="flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors"><LogOut className="w-4 h-4" /> <span className="hidden md:inline">Salir</span></button>
                 </div>
               )}
             </div>
@@ -144,59 +169,41 @@ export default function App() {
         </nav>
       )}
 
-      {/* ENRUTADOR PRINCIPAL */}
-      <main className="max-w-6xl mx-auto p-4 md:p-8">
+      <main className={route === 'survey' ? '' : "max-w-6xl mx-auto p-4 md:p-8"}>
         {route === 'home' && <HomeView campaigns={campaigns} setRoute={setRoute} setSelectedCampaignId={setSelectedCampaignId} />}
         {route === 'login' && <AuthView setRoute={setRoute} />}
-        {route === 'admin' && <AdminDashboard user={user} campaigns={campaigns} responses={responses} setRoute={setRoute} setSelectedCampaignId={setSelectedCampaignId} />}
-        {route === 'builder' && <CampaignBuilder user={user} setRoute={setRoute} appId={appId} />}
-        {route === 'stats' && <StatsView campaignId={selectedCampaignId} campaigns={campaigns} responses={responses} callGeminiAPI={callGeminiAPI} setRoute={setRoute} />}
-        {route === 'globalStats' && <GlobalStatsView user={user} campaigns={campaigns} responses={responses} callGeminiAPI={callGeminiAPI} setRoute={setRoute} />}
+        {route === 'admin' && <AdminDashboard user={user} campaigns={campaigns} responses={responses} companies={companies} setRoute={setRoute} setSelectedCampaignId={setSelectedCampaignId} setEditingCampaign={setEditingCampaign} appId={appId} />}
+        {route === 'orgs' && <OrgManager user={user} companies={companies} setRoute={setRoute} appId={appId} />}
+        {route === 'users' && <UserManager user={user} teamMembers={teamMembers} setRoute={setRoute} appId={appId} />}
+        {route === 'builder' && <CampaignBuilder user={user} companies={companies} setRoute={setRoute} appId={appId} editingCampaign={editingCampaign} />}
+        {route === 'stats' && <StatsView campaignId={selectedCampaignId} campaigns={campaigns} companies={companies} responses={responses} callGeminiAPI={callGeminiAPI} setRoute={setRoute} />}
+        {route === 'globalStats' && <GlobalStatsView user={user} campaigns={campaigns} companies={companies} responses={responses} callGeminiAPI={callGeminiAPI} setRoute={setRoute} />}
       </main>
 
-      {/* VISTA A PANTALLA COMPLETA (ENCUESTA) */}
-      {route === 'survey' && <SurveyRunner campaignId={selectedCampaignId} campaigns={campaigns} appId={appId} setRoute={setRoute} user={user} />}
+      {route === 'survey' && <SurveyRunner campaignId={selectedCampaignId} branchId={selectedBranchId} campaigns={campaigns} appId={appId} setRoute={setRoute} user={user} isCampaignsLoaded={isCampaignsLoaded} />}
     </div>
   );
 }
 
-// ============================================================================
-// 1. VISTA DE INICIO (HOME)
-// ============================================================================
-function HomeView({ campaigns, setRoute, setSelectedCampaignId }) {
-  // Solo mostramos campañas activas para simular que un cliente entra a probar
-  const activeCampaigns = campaigns.filter(c => c.status === 'active');
+// --- VISTAS AUXILIARES ---
 
+function HomeView({ campaigns, setRoute, setSelectedCampaignId }) {
+  const activeCampaigns = campaigns.filter(c => c.status === 'active');
   return (
     <div className="flex flex-col items-center justify-center py-12 md:py-24 text-center animate-in fade-in">
-      <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 mb-6 tracking-tight">
-        Mide la satisfacción <br className="hidden md:block" /> con precisión.
-      </h1>
-      <p className="text-xl text-slate-600 mb-12 max-w-2xl mx-auto">
-        Plataforma inteligente para crear encuestas dinámicas, gestionar múltiples campañas y obtener insights potenciados por Inteligencia Artificial.
-      </p>
-
+      <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 mb-6 tracking-tight">Mide la satisfacción <br className="hidden md:block" /> con precisión.</h1>
+      <p className="text-xl text-slate-600 mb-12 max-w-2xl mx-auto">Plataforma inteligente para crear encuestas dinámicas, gestionar sucursales y obtener insights potenciados por IA.</p>
       <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 w-full max-w-2xl text-left">
-        <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-          <CheckCircle2 className="w-6 h-6 text-green-500" />
-          Encuestas Disponibles (Modo Demo)
-        </h2>
-        {activeCampaigns.length === 0 ? (
-          <p className="text-slate-500 italic">No hay campañas activas en este momento. Ingresa como Admin para crear una.</p>
-        ) : (
+        <h2 className="text-2xl font-bold mb-6 flex items-center gap-2"><CheckCircle2 className="w-6 h-6 text-green-500" /> Encuestas Disponibles (Modo Demo)</h2>
+        {activeCampaigns.length === 0 ? <p className="text-slate-500 italic">No hay campañas activas.</p> : (
           <div className="grid gap-4">
             {activeCampaigns.map(camp => (
               <div key={camp.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-200 hover:border-blue-300 transition-colors">
-                <div>
-                  <h3 className="font-bold text-lg text-slate-800">{camp.title}</h3>
-                  <p className="text-slate-500 text-sm">{camp.questions?.length || 0} preguntas</p>
+                <div className="flex items-center gap-4">
+                   {camp.logoUrl && <img src={camp.logoUrl} alt="Logo" className="w-10 h-10 object-contain rounded bg-white p-1 border border-slate-100" />}
+                   <div><h3 className="font-bold text-lg text-slate-800">{camp.title}</h3><p className="text-slate-500 text-sm">{camp.questions?.length || 0} preguntas</p></div>
                 </div>
-                <button 
-                  onClick={() => { setSelectedCampaignId(camp.id); setRoute('survey'); }}
-                  className="mt-3 sm:mt-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl font-medium shadow-sm transition-colors w-full sm:w-auto"
-                >
-                  Probar Encuesta
-                </button>
+                <button onClick={() => { setSelectedCampaignId(camp.id); setRoute('survey'); }} className="mt-3 sm:mt-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl font-medium transition-colors w-full sm:w-auto">Probar Encuesta</button>
               </div>
             ))}
           </div>
@@ -206,154 +213,265 @@ function HomeView({ campaigns, setRoute, setSelectedCampaignId }) {
   );
 }
 
-// ============================================================================
-// 2. VISTA DE AUTENTICACIÓN (LOGIN/REGISTER)
-// ============================================================================
 function AuthView({ setRoute }) {
   const [isLogin, setIsLogin] = useState(true);
+  const [isRecovering, setIsRecovering] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
-
   const auth = getAuth();
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
+    e.preventDefault(); setError(''); setMessage(''); setLoading(true);
     try {
-      if (isLogin) {
-        await signInWithEmailAndPassword(auth, email, password);
-      } else {
-        await createUserWithEmailAndPassword(auth, email, password);
-      }
-      setRoute('admin');
-    } catch (err) {
-      setError(err.message.includes('auth/') ? 'Credenciales inválidas o correo en uso.' : 'Ocurrió un error.');
-    } finally {
-      setLoading(false);
-    }
+      if (isRecovering) { await sendPasswordResetEmail(auth, email); setMessage('Se ha enviado un enlace de recuperación.'); setTimeout(() => setIsRecovering(false), 5000); }
+      else if (isLogin) { await signInWithEmailAndPassword(auth, email, password); setRoute('admin'); }
+      else { await createUserWithEmailAndPassword(auth, email, password); setRoute('admin'); }
+    } catch (err) { setError(err.message.includes('auth/') ? 'Credenciales inválidas.' : 'Ocurrió un error.'); }
+    finally { setLoading(false); }
   };
 
   return (
     <div className="max-w-md mx-auto mt-12 bg-white p-8 rounded-3xl shadow-lg border border-slate-100 animate-in fade-in slide-in-from-bottom-8">
-      <h2 className="text-3xl font-bold text-center mb-2">{isLogin ? 'Iniciar Sesión' : 'Crear Cuenta'}</h2>
-      <p className="text-slate-500 text-center mb-8">Gestione sus propias campañas de encuestas</p>
-      
+      <h2 className="text-3xl font-bold text-center mb-8">{isRecovering ? 'Recuperar Contraseña' : (isLogin ? 'Iniciar Sesión' : 'Crear Cuenta')}</h2>
       {error && <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm border border-red-200">{error}</div>}
-
+      {message && <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-xl text-sm border border-green-200">{message}</div>}
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Correo Electrónico</label>
-          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
-          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
-        </div>
-        <button type="submit" disabled={loading} className="w-full bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-xl font-bold flex justify-center mt-2 transition-colors disabled:bg-slate-400">
-          {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (isLogin ? 'Entrar' : 'Registrarse')}
+        <input type="email" placeholder="Correo" required value={email} onChange={e => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-blue-500" />
+        {!isRecovering && <input type="password" placeholder="Contraseña" required value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-blue-500" />}
+        <button type="submit" disabled={loading} className="w-full bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-xl font-bold">
+          {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : (isRecovering ? 'Enviar' : (isLogin ? 'Entrar' : 'Registrarse'))}
         </button>
       </form>
-
-      <button onClick={() => setIsLogin(!isLogin)} className="w-full text-center mt-6 text-sm text-blue-600 hover:underline font-medium">
-        {isLogin ? '¿No tienes cuenta? Regístrate aquí' : '¿Ya tienes cuenta? Inicia sesión'}
-      </button>
+      <div className="text-center mt-6 flex flex-col gap-2">
+        <button onClick={() => { setIsLogin(!isLogin); setIsRecovering(false); }} className="text-sm text-blue-600 hover:underline">{isLogin ? '¿No tienes cuenta? Crear una' : '¿Ya tienes cuenta? Inicia sesión'}</button>
+        {isLogin && !isRecovering && <button onClick={() => setIsRecovering(true)} className="text-xs text-slate-500 hover:text-blue-500">¿Olvidaste tu contraseña?</button>}
+      </div>
     </div>
   );
 }
 
-// ============================================================================
-// 3. PANEL DE ADMINISTRADOR (DASHBOARD)
-// ============================================================================
-function AdminDashboard({ user, campaigns, responses, setRoute, setSelectedCampaignId }) {
-  if (!user || user.isAnonymous) return <AuthView setRoute={setRoute} />;
+function UserManager({ user, teamMembers, setRoute, appId }) {
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserRole, setNewUserRole] = useState('Analista');
+  const [isSaving, setIsSaving] = useState(false);
+  const myTeam = teamMembers.filter(m => m.ownerId === user.uid);
 
-  // Filtrar solo las campañas del usuario actual
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!newUserName.trim() || !newUserEmail.trim()) return;
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'team_members'), {
+        ownerId: user.uid, name: newUserName.trim(), email: newUserEmail.trim(), role: newUserRole, createdAt: Date.now()
+      });
+      setNewUserName(''); setNewUserEmail('');
+    } catch (err) { console.error(err); } finally { setIsSaving(false); }
+  };
+
+  const handleDeleteUser = async (id) => {
+    if (!window.confirm('¿Eliminar usuario?')) return;
+    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'team_members', id)); } catch (err) { console.error(err); }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto animate-in fade-in">
+      <div className="flex items-center gap-4 mb-8">
+        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200"><ChevronLeft className="w-5 h-5" /></button>
+        <h1 className="text-3xl font-bold text-slate-800">Gestor de Usuarios</h1>
+      </div>
+      <form onSubmit={handleAddUser} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 grid grid-cols-1 md:grid-cols-4 gap-4">
+        <input placeholder="Nombre" value={newUserName} onChange={e => setNewUserName(e.target.value)} required className="px-4 py-2 rounded-lg border border-slate-300" />
+        <input type="email" placeholder="Correo" value={newUserEmail} onChange={e => setNewUserEmail(e.target.value)} required className="px-4 py-2 rounded-lg border border-slate-300" />
+        <select value={newUserRole} onChange={e => setNewUserRole(e.target.value)} className="px-4 py-2 rounded-lg border border-slate-300">
+          <option value="Administrador">Administrador</option>
+          <option value="Gerente">Gerente</option>
+          <option value="Analista">Analista</option>
+        </select>
+        <button type="submit" disabled={isSaving} className="bg-slate-900 text-white rounded-lg font-bold">Agregar</button>
+      </form>
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+        {myTeam.map(member => (
+          <div key={member.id} className="p-4 flex items-center justify-between border-b border-slate-100 last:border-0">
+            <div><p className="font-bold">{member.name}</p><p className="text-sm text-slate-500">{member.email} • {member.role}</p></div>
+            <button onClick={() => handleDeleteUser(member.id)} className="text-slate-400 hover:text-red-500 transition-colors p-2"><Trash2 className="w-5 h-5" /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OrgManager({ user, companies, setRoute, appId }) {
+  const [newCompName, setNewCompName] = useState('');
+  const [newBranchNames, setNewBranchNames] = useState({});
+  const [isSavingComp, setIsSavingComp] = useState(false);
+  const myCompanies = companies.filter(c => c.ownerId === user.uid);
+
+  const handleCreateCompany = async (e) => {
+    e.preventDefault(); if (!newCompName.trim()) return;
+    setIsSavingComp(true);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'companies'), {
+        ownerId: user.uid, name: newCompName.trim(), branches: [], createdAt: Date.now()
+      });
+      setNewCompName('');
+    } catch (err) { console.error(err); } finally { setIsSavingComp(false); }
+  };
+
+  const handleCreateBranch = async (compId) => {
+    const branchName = newBranchNames[compId]; if (!branchName?.trim()) return;
+    try {
+      const compRef = doc(db, 'artifacts', appId, 'public', 'data', 'companies', compId);
+      await updateDoc(compRef, { branches: arrayUnion({ id: `b_${Date.now()}`, name: branchName.trim() }) });
+      setNewBranchNames({ ...newBranchNames, [compId]: '' });
+    } catch (err) { console.error(err); }
+  };
+
+  const handleDeleteBranch = async (compId, branchObj) => {
+    if (!window.confirm('¿Eliminar sucursal?')) return;
+    try {
+      const compRef = doc(db, 'artifacts', appId, 'public', 'data', 'companies', compId);
+      await updateDoc(compRef, { branches: arrayRemove(branchObj) });
+    } catch (err) { console.error(err); }
+  };
+
+  const handleDeleteCompany = async (id) => {
+    if (!window.confirm('¿Eliminar empresa?')) return;
+    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'companies', id)); } catch (err) { console.error(err); }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto animate-in fade-in">
+      <div className="flex items-center gap-4 mb-8">
+        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200"><ChevronLeft className="w-5 h-5" /></button>
+        <h1 className="text-3xl font-bold">Empresas y Sucursales</h1>
+      </div>
+      <form onSubmit={handleCreateCompany} className="bg-white p-6 rounded-2xl border border-slate-200 flex gap-4 mb-8">
+        <input placeholder="Nombre de Empresa" value={newCompName} onChange={e => setNewCompName(e.target.value)} required className="flex-1 px-4 py-2 border rounded-lg" />
+        <button type="submit" disabled={isSavingComp} className="bg-slate-900 text-white px-6 rounded-lg font-bold">Crear</button>
+      </form>
+      <div className="space-y-6">
+        {myCompanies.map(comp => (
+          <div key={comp.id} className="bg-white p-6 rounded-3xl border border-slate-200 relative group">
+            <button onClick={() => handleDeleteCompany(comp.id)} className="absolute top-6 right-6 text-slate-300 hover:text-red-500"><Trash2 className="w-5 h-5" /></button>
+            <h3 className="text-2xl font-bold mb-4">{comp.name}</h3>
+            <div className="ml-4 md:ml-8 border-l-2 border-slate-100 pl-6">
+              <p className="text-xs font-bold text-slate-400 uppercase mb-4">Sucursales</p>
+              <div className="space-y-2 mb-4">
+                {comp.branches?.map(b => (
+                  <div key={b.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="font-medium text-slate-700">{b.name}</span>
+                    <button onClick={() => handleDeleteBranch(comp.id, b)} className="text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input placeholder="Nueva sucursal..." value={newBranchNames[comp.id] || ''} onChange={e => setNewBranchNames({ ...newBranchNames, [comp.id]: e.target.value })} className="flex-1 px-4 py-2 text-sm border rounded-lg" />
+                <button onClick={() => handleCreateBranch(comp.id)} className="bg-blue-600 text-white px-4 rounded-lg font-bold text-sm">+</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminDashboard({ user, campaigns, responses, companies, setRoute, setSelectedCampaignId, setEditingCampaign, appId }) {
+  const [copiedId, setCopiedId] = useState(null);
+  if (!user || user.isAnonymous) return <AuthView setRoute={setRoute} />;
   const myCampaigns = campaigns.filter(c => c.ownerId === user.uid);
+
+  const handleCopyLink = (campaignId, branchId = null) => {
+    let url = `${window.location.origin}${window.location.pathname}?survey=${campaignId}`;
+    if (branchId) url += `&branch=${branchId}`;
+    const textArea = document.createElement("textarea");
+    textArea.value = url; document.body.appendChild(textArea); textArea.select();
+    try { document.execCommand('copy'); setCopiedId(`${campaignId}-${branchId || 'main'}`); setTimeout(() => setCopiedId(null), 2000); } catch (err) { console.error(err); }
+    document.body.removeChild(textArea);
+  };
+
+  const handleDeleteCampaign = async (id) => {
+    if (!window.confirm('¿Eliminar campaña permanentemente?')) return;
+    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'campaigns', id)); } catch (err) { console.error(err); }
+  };
 
   return (
     <div className="animate-in fade-in">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">Mis Campañas</h1>
-          <p className="text-slate-500">Administra tus encuestas y analiza resultados</p>
-        </div>
-        <div className="flex items-center gap-3 w-full md:w-auto">
-          <button onClick={() => setRoute('globalStats')} disabled={myCampaigns.length === 0} className="flex-1 md:flex-none flex justify-center items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-5 py-3 rounded-xl font-bold shadow-sm transition-colors disabled:opacity-50">
-            <BarChart3 className="w-5 h-5" /> Global
-          </button>
-          <button onClick={() => setRoute('builder')} className="flex-1 md:flex-none flex justify-center items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl font-bold shadow-sm transition-colors">
-            <Plus className="w-5 h-5" /> Nueva Campaña
-          </button>
+        <div><h1 className="text-3xl font-bold text-slate-800">Mis Campañas</h1><p className="text-slate-500">Analiza y gestiona tus encuestas</p></div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setRoute('users')} className="px-4 py-2 bg-white border rounded-xl font-bold text-sm">Equipo</button>
+          <button onClick={() => setRoute('orgs')} className="px-4 py-2 bg-white border rounded-xl font-bold text-sm">Empresas</button>
+          <button onClick={() => setRoute('globalStats')} className="px-4 py-2 bg-white border rounded-xl font-bold text-sm">Global</button>
+          <button onClick={() => { setEditingCampaign(null); setRoute('builder'); }} className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-sm hover:bg-blue-700 transition-colors">+ Nueva</button>
         </div>
       </div>
-
-      {myCampaigns.length === 0 ? (
-        <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm">
-          <div className="bg-blue-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-            <ListPlus className="w-10 h-10 text-blue-500" />
-          </div>
-          <h3 className="text-xl font-bold mb-2">Aún no tienes campañas</h3>
-          <p className="text-slate-500 mb-6">Crea tu primera campaña para empezar a medir la satisfacción de tus clientes.</p>
-          <button onClick={() => setRoute('builder')} className="text-blue-600 font-medium hover:underline">Crear ahora →</button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {myCampaigns.map(camp => {
-            const campResponses = responses.filter(r => r.campaignId === camp.id);
-            return (
-              <div key={camp.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col h-full">
-                <div className="flex justify-between items-start mb-4">
-                  <h3 className="font-bold text-xl text-slate-800 line-clamp-2">{camp.title}</h3>
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${camp.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'}`}>
-                    {camp.status === 'active' ? 'Activa' : 'Pausada'}
-                  </span>
-                </div>
-                
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 text-slate-500 mb-2">
-                    <BarChart3 className="w-4 h-4" /> {campResponses.length} Respuestas
-                  </div>
-                  <div className="flex items-center gap-2 text-slate-500">
-                    <ListPlus className="w-4 h-4" /> {camp.questions?.length || 0} Preguntas
-                  </div>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-slate-100 flex gap-2">
-                  <button 
-                    onClick={() => { setSelectedCampaignId(camp.id); setRoute('stats'); }}
-                    className="flex-1 bg-slate-900 hover:bg-slate-800 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    Ver Estadísticas
-                  </button>
-                  <button 
-                    onClick={() => { setSelectedCampaignId(camp.id); setRoute('survey'); }}
-                    title="Probar/Ver URL"
-                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
-                  >
-                    <LinkIcon className="w-5 h-5" />
-                  </button>
-                </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {myCampaigns.map(camp => {
+          const campResponses = responses.filter(r => r.campaignId === camp.id);
+          const parentComp = companies.find(c => c.id === camp.companyId);
+          return (
+            <div key={camp.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative group flex flex-col h-full hover:shadow-md transition-all">
+              <div className="absolute top-4 right-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                <button onClick={() => { setEditingCampaign(camp); setRoute('builder'); }} className="p-2 bg-white shadow text-slate-400 hover:text-blue-600 rounded-lg border border-slate-100" title="Editar"><Edit3 className="w-4 h-4" /></button>
+                <button onClick={() => handleDeleteCampaign(camp.id)} className="p-2 bg-white shadow text-slate-400 hover:text-red-600 rounded-lg border border-slate-100" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div className="flex items-center gap-3 mb-4">
+                {camp.logoUrl ? (
+                   <img src={camp.logoUrl} alt="Logo" className="w-10 h-10 object-contain rounded bg-slate-50 p-1" />
+                ) : (
+                   <div className="w-10 h-10 rounded bg-slate-50 flex items-center justify-center border border-slate-100" style={{backgroundColor: camp.bgColor || '#f8fafc'}}><ImageIcon className="w-5 h-5 text-slate-300" /></div>
+                )}
+                <div><h3 className="font-bold text-lg line-clamp-1">{camp.title}</h3><p className="text-xs font-bold text-blue-500 uppercase">{parentComp?.name || 'Independiente'}</p></div>
+              </div>
+              <div className="flex gap-4 text-xs text-slate-500 mb-6"><span>{campResponses.length} respuestas</span><span>{camp.questions?.length} preguntas</span></div>
+              <div className="space-y-1 mb-6 max-h-32 overflow-y-auto pr-2">
+                {camp.branchIds?.map(bId => {
+                  const b = parentComp?.branches?.find(branch => branch.id === bId);
+                  return (
+                    <div key={bId} className="flex items-center justify-between text-[10px] bg-slate-50 p-1.5 rounded">
+                      <span className="truncate flex-1 pr-2">{b?.name || 'Sucursal'}</span>
+                      <button onClick={() => handleCopyLink(camp.id, bId)} className="text-blue-500 font-bold hover:underline">{copiedId === `${camp.id}-${bId}` ? 'Copiado!' : 'URL'}</button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-auto flex gap-2">
+                <button onClick={() => { setSelectedCampaignId(camp.id); setRoute('stats'); }} className="flex-1 py-2 bg-slate-900 text-white rounded-lg text-sm font-bold">Estadísticas</button>
+                <button onClick={() => { setSelectedCampaignId(camp.id); setRoute('survey'); }} className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"><Eye className="w-5 h-5 text-slate-600" /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-// ============================================================================
-// 4. CREADOR DE CAMPAÑAS (BUILDER)
-// ============================================================================
-function CampaignBuilder({ user, setRoute, appId }) {
+function CampaignBuilder({ user, companies, setRoute, appId, editingCampaign }) {
   const [title, setTitle] = useState('');
-  const [questions, setQuestions] = useState([
-    { id: 'q_1', type: 'rating', title: '¿Qué te pareció nuestro servicio?' }
-  ]);
+  const [logoUrl, setLogoUrl] = useState('');
+  const [bgColor, setBgColor] = useState('#f8fafc'); // Nuevo campo: Color de fondo
+  const [companyId, setCompanyId] = useState('');
+  const [branchIds, setBranchIds] = useState([]);
+  const [questions, setQuestions] = useState([{ id: 'q_1', type: 'rating', title: '¿Cómo calificarías nuestro servicio hoy?' }]);
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (editingCampaign) {
+      setTitle(editingCampaign.title || '');
+      setLogoUrl(editingCampaign.logoUrl || '');
+      setBgColor(editingCampaign.bgColor || '#f8fafc');
+      setCompanyId(editingCampaign.companyId || '');
+      setBranchIds(editingCampaign.branchIds || []);
+      setQuestions(editingCampaign.questions || []);
+    }
+  }, [editingCampaign]);
 
   const addQuestion = (type) => {
     const newQ = { id: `q_${Date.now()}`, type, title: 'Nueva pregunta...' };
@@ -361,665 +479,397 @@ function CampaignBuilder({ user, setRoute, appId }) {
     setQuestions([...questions, newQ]);
   };
 
-  const updateQuestion = (index, field, value) => {
-    const newQ = [...questions];
-    newQ[index][field] = value;
-    setQuestions(newQ);
+  const updateQuestion = (idx, field, value) => {
+    const n = [...questions]; n[idx][field] = value; setQuestions(n);
   };
 
-  const updateOption = (qIndex, optIndex, value) => {
-    const newQ = [...questions];
-    newQ[qIndex].options[optIndex] = value;
-    setQuestions(newQ);
-  };
-
-  const updateCondition = (index, field, value) => {
-    const newQ = [...questions];
-    if (!newQ[index].condition) {
-      // Default condition
-      newQ[index].condition = { dependsOnId: questions[index - 1]?.id || questions[0].id, operator: '==', value: '' };
-    }
-    newQ[index].condition[field] = value;
-    setQuestions(newQ);
-  };
-
-  const removeQuestion = (index) => {
-    setQuestions(questions.filter((_, i) => i !== index));
+  const updateCondition = (idx, field, value) => {
+    const n = [...questions];
+    if (!n[idx].condition) n[idx].condition = { dependsOnId: questions[idx-1]?.id || questions[0].id, operator: '==', value: '' };
+    n[idx].condition[field] = value;
+    setQuestions(n);
   };
 
   const handleSave = async () => {
-    if (!title.trim() || questions.length === 0) return alert('Pon un título y al menos 1 pregunta.');
+    if (!title.trim() || !companyId || branchIds.length === 0) return alert('Por favor, completa el título, empresa y sucursales.');
     setIsSaving(true);
     try {
-      const db = getFirestore();
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'campaigns'), {
-        ownerId: user.uid,
-        title,
-        questions,
-        status: 'active',
-        createdAt: Date.now()
-      });
+      const data = { ownerId: user.uid, title, logoUrl, bgColor, companyId, branchIds, questions, status: 'active', updatedAt: Date.now() };
+      if (editingCampaign) {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'campaigns', editingCampaign.id), data);
+      } else {
+        data.createdAt = Date.now();
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'campaigns'), data);
+      }
       setRoute('admin');
-    } catch (error) {
-      console.error(error);
-      alert('Error guardando campaña');
-    } finally {
-      setIsSaving(false);
-    }
+    } catch (err) { console.error(err); alert("Error al guardar."); } finally { setIsSaving(false); }
   };
 
+  const myCompanies = companies.filter(c => c.ownerId === user.uid);
+  const selectedComp = myCompanies.find(c => c.id === companyId);
+
   return (
-    <div className="max-w-4xl mx-auto animate-in fade-in">
+    <div className="max-w-4xl mx-auto animate-in fade-in pb-20">
       <div className="flex items-center gap-4 mb-8">
-        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200 hover:bg-slate-50"><ChevronLeft className="w-5 h-5" /></button>
-        <h1 className="text-3xl font-bold">Crear Nueva Campaña</h1>
+        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200"><ChevronLeft className="w-5 h-5" /></button>
+        <h1 className="text-3xl font-bold">{editingCampaign ? 'Modificar Campaña' : 'Nueva Campaña'}</h1>
       </div>
-
-      <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-200 mb-6">
-        <label className="block font-bold text-slate-800 mb-2">Nombre de la Campaña</label>
-        <input type="text" value={title} onChange={e=>setTitle(e.target.value)} placeholder="Ej. Encuesta Sucursal Centro" className="w-full text-xl font-medium px-4 py-3 border-b-2 border-slate-200 focus:border-blue-500 outline-none bg-transparent transition-colors mb-4" />
-      </div>
-
-      <div className="space-y-6 mb-8">
-        {questions.map((q, index) => (
-          <div key={q.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 relative group transition-all">
-            <button onClick={() => removeQuestion(index)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 className="w-5 h-5" /></button>
+      
+      <div className="bg-white p-8 rounded-3xl border border-slate-200 mb-8 space-y-6 shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          {/* Detalles de Identidad */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Nombre de la Campaña</label>
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Satisfacción Sucursal Norte" className="w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-blue-500 outline-none" />
+            </div>
             
-            <div className="flex items-center gap-2 mb-4">
-              <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">
-                {q.type === 'rating' ? 'Caritas (1-5)' : q.type === 'choice' ? 'Opción Múltiple' : 'Texto Abierto'}
-              </span>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">URL del Logotipo</label>
+              <div className="flex gap-2">
+                <input value={logoUrl} onChange={e => setLogoUrl(e.target.value)} placeholder="https://..." className="flex-1 px-4 py-3 rounded-xl border outline-none" />
+                {logoUrl && <img src={logoUrl} alt="Preview" className="w-12 h-12 object-contain bg-slate-50 border rounded p-1" />}
+              </div>
             </div>
 
-            <input type="text" value={q.title} onChange={e => updateQuestion(index, 'title', e.target.value)} className="w-full text-lg font-bold text-slate-800 border-b border-dashed border-slate-300 pb-2 mb-4 focus:border-blue-500 outline-none" />
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                <Palette className="w-4 h-4 text-blue-500" /> Color de Fondo de la Encuesta
+              </label>
+              <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                 <input 
+                   type="color" 
+                   value={bgColor} 
+                   onChange={e => setBgColor(e.target.value)} 
+                   className="w-12 h-12 rounded-lg cursor-pointer border-0 bg-transparent"
+                 />
+                 <input 
+                   type="text" 
+                   value={bgColor} 
+                   onChange={e => setBgColor(e.target.value)} 
+                   placeholder="#ffffff"
+                   className="flex-1 bg-white px-3 py-1.5 rounded-lg border text-sm font-mono"
+                 />
+                 <div className="w-8 h-8 rounded shadow-inner" style={{backgroundColor: bgColor}}></div>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">Este color se verá en el fondo de pantalla del cliente.</p>
+            </div>
+          </div>
 
+          {/* Detalles de Organización */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Empresa Responsable</label>
+              <select value={companyId} onChange={e => { setCompanyId(e.target.value); setBranchIds([]); }} className="w-full px-4 py-3 rounded-xl border bg-white outline-none">
+                <option value="">Seleccionar Empresa...</option>
+                {myCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            {selectedComp && (
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 max-h-48 overflow-y-auto">
+                <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Activar en Sucursales</p>
+                {selectedComp.branches?.map(b => (
+                  <label key={b.id} className="flex items-center gap-2 cursor-pointer text-sm mb-1 hover:bg-slate-100 p-1 rounded transition-colors font-medium text-slate-700">
+                    <input type="checkbox" checked={branchIds.includes(b.id)} onChange={() => setBranchIds(prev => prev.includes(b.id) ? prev.filter(x => x !== b.id) : [...prev, b.id])} className="rounded text-blue-600" /> 
+                    {b.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Preguntas */}
+      <div className="space-y-4 mb-12">
+        {questions.map((q, idx) => (
+          <div key={q.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm relative transition-all hover:border-blue-200">
+            <div className="flex justify-between items-center mb-4">
+              <span className="text-[10px] font-bold uppercase px-2 py-1 bg-blue-50 text-blue-600 rounded">{q.type === 'rating' ? 'Caritas' : q.type === 'choice' ? 'Opciones' : 'Texto'}</span>
+              <button onClick={() => setQuestions(questions.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4" /></button>
+            </div>
+            <input value={q.title} onChange={e => updateQuestion(idx, 'title', e.target.value)} className="w-full font-bold text-lg outline-none border-b border-dashed border-slate-200 pb-2 mb-4 focus:border-blue-400" placeholder="Escribe la pregunta..." />
+            
             {q.type === 'choice' && (
               <div className="space-y-2 ml-4">
-                {q.options.map((opt, optIdx) => (
-                  <div key={optIdx} className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded-full border-2 border-slate-300"></div>
-                    <input type="text" value={opt} onChange={e => updateOption(index, optIdx, e.target.value)} className="flex-1 py-1 outline-none text-slate-600 focus:text-blue-600" />
+                {q.options?.map((opt, oIdx) => (
+                  <div key={oIdx} className="flex gap-2 items-center">
+                    <div className="w-2 h-2 rounded-full bg-slate-200"></div>
+                    <input value={opt} onChange={e => { const n = [...questions]; n[idx].options[oIdx] = e.target.value; setQuestions(n); }} className="flex-1 text-sm text-slate-600 outline-none border-b border-transparent focus:border-slate-100" />
+                    <button onClick={() => { const n = [...questions]; n[idx].options.splice(oIdx, 1); setQuestions(n); }} className="text-slate-300 hover:text-red-400 text-xs">x</button>
                   </div>
                 ))}
-                <button onClick={() => updateQuestion(index, 'options', [...q.options, `Opción ${q.options.length + 1}`])} className="text-sm text-blue-600 font-medium hover:underline mt-2">+ Añadir opción</button>
+                <button onClick={() => { const n = [...questions]; n[idx].options = [...(n[idx].options||[]), 'Nueva Opción']; setQuestions(n); }} className="text-[10px] text-blue-600 font-bold hover:underline">+ Agregar Opción</button>
               </div>
             )}
 
-            {/* --- SECCIÓN DE LÓGICA CONDICIONAL --- */}
-            {index > 0 && (
-              <div className="mt-6 pt-4 border-t border-slate-100 bg-slate-50 p-4 rounded-xl">
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer select-none">
-                  <input 
-                    type="checkbox" 
-                    checked={!!q.condition} 
-                    onChange={e => {
-                      if (e.target.checked) {
-                        updateCondition(index, 'dependsOnId', questions[index - 1].id);
-                      } else {
-                        const newQ = [...questions];
-                        delete newQ[index].condition;
-                        setQuestions(newQ);
-                      }
-                    }}
-                    className="w-4 h-4 text-blue-600 rounded"
-                  />
-                  Mostrar esta pregunta solo si se cumple una condición
-                </label>
-
-                {q.condition && (() => {
-                  const depQ = questions.find(prev => prev.id === q.condition.dependsOnId) || questions[0];
-                  return (
-                    <div className="flex flex-col sm:flex-row gap-3 mt-4 animate-in fade-in">
-                      <select 
-                        value={q.condition.dependsOnId}
-                        onChange={e => updateCondition(index, 'dependsOnId', e.target.value)}
-                        className="flex-1 p-2 rounded-lg border border-slate-300 text-sm outline-none focus:border-blue-500"
-                      >
-                        {questions.slice(0, index).map(prevQ => (
-                          <option key={prevQ.id} value={prevQ.id}>Resp. a: {prevQ.title || 'Sin título'}</option>
-                        ))}
+            {idx > 0 && (
+              <div className="mt-6 pt-4 border-t border-slate-50 bg-slate-50/50 p-3 rounded-xl">
+                 <label className="flex items-center gap-2 text-xs font-bold text-slate-500 cursor-pointer mb-3">
+                   <input type="checkbox" checked={!!q.condition} onChange={e => { if(e.target.checked) updateCondition(idx, 'dependsOnId', questions[idx-1].id); else { const n=[...questions]; delete n[idx].condition; setQuestions(n); }}} className="rounded" /> Condicional
+                 </label>
+                 {q.condition && (
+                   <div className="flex flex-wrap gap-2 animate-in fade-in">
+                      <select value={q.condition.dependsOnId} onChange={e => updateCondition(idx, 'dependsOnId', e.target.value)} className="text-[10px] p-2 border rounded-lg bg-white outline-none">
+                         {questions.slice(0, idx).map(pq => <option key={pq.id} value={pq.id}>Si en: {pq.title.substring(0,20)}...</option>)}
                       </select>
-
-                      <select
-                        value={q.condition.operator}
-                        onChange={e => updateCondition(index, 'operator', e.target.value)}
-                        className="p-2 rounded-lg border border-slate-300 text-sm outline-none focus:border-blue-500 bg-white"
-                      >
-                        <option value="==">es igual a</option>
-                        {depQ.type === 'rating' && <option value="<=">es menor o igual a</option>}
-                        {depQ.type === 'rating' && <option value=">=">es mayor o igual a</option>}
+                      <select value={q.condition.operator} onChange={e => updateCondition(idx, 'operator', e.target.value)} className="text-[10px] p-2 border rounded-lg bg-white outline-none">
+                         <option value="==">es igual a</option><option value="<=">es menor o igual a</option><option value=">=">es mayor o igual a</option>
                       </select>
-
-                      {depQ.type === 'rating' ? (
-                        <select
-                          value={q.condition.value}
-                          onChange={e => updateCondition(index, 'value', parseInt(e.target.value))}
-                          className="p-2 rounded-lg border border-slate-300 text-sm outline-none focus:border-blue-500 bg-white"
-                        >
-                          <option value="">Selecciona...</option>
-                          {RATING_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label} ({opt.value})</option>)}
-                        </select>
-                      ) : depQ.type === 'choice' ? (
-                        <select
-                          value={q.condition.value}
-                          onChange={e => updateCondition(index, 'value', e.target.value)}
-                          className="p-2 rounded-lg border border-slate-300 text-sm outline-none focus:border-blue-500 bg-white"
-                        >
-                          <option value="">Selecciona...</option>
-                          {depQ.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
-                      ) : (
-                        <input 
-                          type="text" 
-                          placeholder="Respuesta exacta..."
-                          value={q.condition.value}
-                          onChange={e => updateCondition(index, 'value', e.target.value)}
-                          className="p-2 rounded-lg border border-slate-300 text-sm outline-none focus:border-blue-500"
-                        />
-                      )}
-                    </div>
-                  );
-                })()}
+                      <input value={q.condition.value} onChange={e => updateCondition(idx, 'value', e.target.value)} placeholder="Valor..." className="text-[10px] p-2 border rounded-lg bg-white outline-none w-20" />
+                   </div>
+                 )}
               </div>
             )}
           </div>
         ))}
-      </div>
-
-      <div className="bg-slate-100 p-6 rounded-2xl border border-dashed border-slate-300 text-center mb-12">
-        <p className="font-medium text-slate-600 mb-4">Añadir nueva pregunta</p>
-        <div className="flex flex-wrap justify-center gap-3">
-          <button onClick={() => addQuestion('rating')} className="bg-white hover:bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl font-medium shadow-sm transition-colors">🙂 Caritas</button>
-          <button onClick={() => addQuestion('choice')} className="bg-white hover:bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl font-medium shadow-sm transition-colors">🔘 Opciones</button>
-          <button onClick={() => addQuestion('text')} className="bg-white hover:bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl font-medium shadow-sm transition-colors">📝 Texto Libre</button>
+        <div className="flex gap-2 justify-center py-4">
+          <button onClick={() => addQuestion('rating')} className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold hover:bg-slate-50">🙂 Caritas</button>
+          <button onClick={() => addQuestion('choice')} className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold hover:bg-slate-50">🔘 Opciones</button>
+          <button onClick={() => addQuestion('text')} className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold hover:bg-slate-50">📝 Texto</button>
         </div>
       </div>
 
-      <div className="flex justify-end border-t border-slate-200 pt-6">
-        <button onClick={handleSave} disabled={isSaving} className="bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-2xl font-bold text-lg shadow-md transition-all flex items-center gap-2">
-          {isSaving ? <Loader2 className="w-6 h-6 animate-spin" /> : <CheckCircle2 className="w-6 h-6" />} Guardar Campaña
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/80 backdrop-blur border-t flex justify-center z-50">
+        <button onClick={handleSave} disabled={isSaving} className="max-w-md w-full py-4 bg-green-600 text-white rounded-2xl font-bold shadow-lg hover:bg-green-700 transition-all flex justify-center items-center gap-2">
+          {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />} {editingCampaign ? 'Guardar Cambios' : 'Publicar Campaña'}
         </button>
       </div>
     </div>
   );
 }
 
-// ============================================================================
-// 5. MOTOR DE ENCUESTAS (VISTA PARA EL CLIENTE FINAL)
-// ============================================================================
-function SurveyRunner({ campaignId, campaigns, appId, setRoute, user }) {
-  const campaign = campaigns.find(c => c.id === campaignId);
+function SurveyRunner({ campaignId, branchId, campaigns, appId, setRoute, user, isCampaignsLoaded }) {
   const [currentStep, setCurrentStep] = useState(0);
   const [answers, setAnswers] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
 
-  if (!campaign) return <div className="p-8 text-center"><p>Campaña no encontrada.</p><button onClick={() => setRoute('home')} className="mt-4 text-blue-600">Volver</button></div>;
+  if (!isCampaignsLoaded) return <div className="h-screen flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-blue-500" /></div>;
+  const campaign = campaigns.find(c => c.id === campaignId);
+  if (!campaign) return <div className="text-center p-20 flex flex-col items-center"><AlertCircle className="w-12 h-12 text-red-500 mb-4" /><h1 className="text-2xl font-bold">Encuesta no encontrada</h1><button onClick={() => setRoute('home')} className="mt-4 text-blue-600 font-bold">Ir al inicio</button></div>;
+  const currentQ = campaign.questions[currentStep];
 
-  const questions = campaign.questions || [];
-  const currentQ = questions[currentStep];
-
-  // Función para evaluar cuál es la siguiente pregunta visible
   const getNextIndex = (currentIndex, currentAnswers) => {
-    for (let i = currentIndex + 1; i < questions.length; i++) {
-      const q = questions[i];
-      
-      // Si no tiene condición, es visible
+    for (let i = currentIndex + 1; i < campaign.questions.length; i++) {
+      const q = campaign.questions[i];
       if (!q.condition) return i;
-
-      // Evaluar la condición
       const ans = currentAnswers[q.condition.dependsOnId];
-      if (ans === undefined || ans === '') continue; // Condición no cumplida porque no hay respuesta
-
+      if (ans === undefined) continue;
       const val = q.condition.value;
       if (q.condition.operator === '==' && ans == val) return i;
       if (q.condition.operator === '<=' && ans <= val) return i;
       if (q.condition.operator === '>=' && ans >= val) return i;
     }
-    return -1; // Fin de la encuesta
+    return -1;
   };
 
   const handleAnswer = (val) => {
     const newAnswers = { ...answers, [currentQ.id]: val };
     setAnswers(newAnswers);
-    
-    // Auto-avanzar si no es de texto libre
     if (currentQ.type !== 'text') {
-      setTimeout(() => {
-        const nextIdx = getNextIndex(currentStep, newAnswers);
-        if (nextIdx !== -1) {
-          setCurrentStep(nextIdx);
-        } else {
-          handleSubmit(newAnswers);
-        }
-      }, 400); // Pequeña demora para que vea la selección
-    }
-  };
-
-  const handleNextText = () => {
-    const nextIdx = getNextIndex(currentStep, answers);
-    if (nextIdx !== -1) {
-      setCurrentStep(nextIdx);
-    } else {
-      handleSubmit(answers);
+      setTimeout(() => { const nextIdx = getNextIndex(currentStep, newAnswers); if (nextIdx !== -1) setCurrentStep(nextIdx); else handleSubmit(newAnswers); }, 400);
     }
   };
 
   const handleSubmit = async (finalAnswers) => {
     setIsSubmitting(true);
     try {
-      const db = getFirestore();
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'responses'), {
-        campaignId,
-        answers: finalAnswers,
-        timestamp: Date.now()
-      });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'responses'), { campaignId, branchId: branchId || 'unknown', answers: finalAnswers, timestamp: Date.now() });
       setIsFinished(true);
-      // Opcional: auto-recargar la encuesta para el siguiente cliente en modo Kiosko
-      setTimeout(() => {
-        setAnswers({});
-        setCurrentStep(0);
-        setIsFinished(false);
-      }, 5000);
-    } catch (e) {
-      console.error(e);
-      alert("Error al enviar la respuesta.");
-    } finally {
-      setIsSubmitting(false);
-    }
+      setTimeout(() => { setAnswers({}); setCurrentStep(0); setIsFinished(false); }, 4000);
+    } catch (e) { console.error(e); } finally { setIsSubmitting(false); }
   };
 
-  if (isFinished) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-white">
-        <div className="bg-green-100 p-6 rounded-full mb-6 animate-in zoom-in">
-          <CheckCircle2 className="w-24 h-24 text-green-600" />
-        </div>
-        <h2 className="text-4xl md:text-5xl font-bold text-slate-800 mb-4">¡Muchas Gracias!</h2>
-        <p className="text-xl text-slate-600">Tus respuestas han sido guardadas.</p>
-        
-        {/* Botón para salir del modo encuesta (útil si estás probando) */}
-        <button onClick={() => setRoute(user?.isAnonymous ? 'home' : 'admin')} className="mt-12 text-slate-400 hover:text-slate-600">Salir de la vista de encuesta</button>
+  if (isFinished) return (
+    <div className="flex flex-col items-center justify-center h-screen p-6 text-center animate-in zoom-in" style={{backgroundColor: campaign.bgColor || '#ffffff'}}>
+      <div className="bg-white/90 backdrop-blur-sm p-10 rounded-[3rem] shadow-2xl max-w-xl w-full border border-white/50 flex flex-col items-center">
+        {campaign.logoUrl && <img src={campaign.logoUrl} alt="Logo" className="w-24 h-24 object-contain mb-8 animate-in fade-in" />}
+        <CheckCircle2 className="w-20 h-20 text-green-500 mb-6" />
+        <h2 className="text-4xl font-black mb-4 text-slate-800 tracking-tight">¡Muchas Gracias!</h2>
+        <p className="text-slate-600 text-lg font-medium">Tus comentarios nos ayudan a mejorar cada día.</p>
       </div>
-    );
-  }
-
-  // Calculamos progreso aproximado (basado en el índice actual)
-  const progress = ((currentStep) / questions.length) * 100;
+    </div>
+  );
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-50 relative">
-      {/* Barra de progreso */}
-      <div className="fixed top-0 left-0 right-0 h-2 bg-slate-200 z-50">
-        <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${progress}%` }}></div>
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 relative transition-colors duration-700" style={{backgroundColor: campaign.bgColor || '#f8fafc'}}>
+      {/* Barra de progreso sutil */}
+      <div className="fixed top-0 left-0 right-0 h-1.5 bg-black/10 z-50">
+        <div className="h-full bg-blue-600 transition-all duration-700 rounded-r-full" style={{ width: `${(currentStep / campaign.questions.length) * 100}%` }}></div>
+      </div>
+      
+      {/* Logo superior */}
+      <div className="absolute top-10 left-0 right-0 flex justify-center h-20 pointer-events-none px-6">
+        {campaign.logoUrl ? (
+          <img src={campaign.logoUrl} alt="Logo Empresa" className="max-h-full max-w-[220px] object-contain drop-shadow-sm animate-in fade-in slide-in-from-top-4" />
+        ) : (
+          <div className="h-10 w-1 bg-black/10 rounded-full"></div>
+        )}
       </div>
 
-      {/* Botón Salir (Solo para testeo, en un kiosko real se quitaría) */}
-      <button onClick={() => setRoute(user?.isAnonymous ? 'home' : 'admin')} className="absolute top-6 right-6 p-2 text-slate-400 hover:bg-slate-200 rounded-full transition-colors z-40">
-         <Settings className="w-6 h-6" />
-      </button>
-
-      <div className="flex-1 flex flex-col items-center justify-center p-6 w-full max-w-4xl mx-auto animate-in fade-in slide-in-from-right-8" key={currentStep}>
+      <div className="w-full max-w-4xl text-center animate-in fade-in slide-in-from-bottom-8 duration-500" key={currentStep}>
         
-        <span className="text-blue-600 font-bold tracking-widest text-sm mb-4 uppercase">Pregunta {currentStep + 1} de {questions.length}</span>
-        <h1 className="text-3xl md:text-5xl font-bold text-slate-800 mb-12 text-center leading-tight">
-          {currentQ?.title}
-        </h1>
+        {/* Contenedor de la Pregunta */}
+        <div className="bg-white/80 backdrop-blur-md p-8 md:p-12 rounded-[2.5rem] shadow-xl border border-white/40 mb-12">
+           <h1 className="text-3xl md:text-5xl font-black text-slate-800 leading-tight">
+             {currentQ?.title}
+           </h1>
+        </div>
 
-        {/* Tipo: RATING */}
-        {currentQ?.type === 'rating' && (
-          <div className="flex flex-wrap justify-center gap-4 md:gap-8 w-full">
-            {RATING_OPTIONS.map((opt) => {
-              const isSelected = answers[currentQ.id] === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  onClick={() => handleAnswer(opt.value)}
-                  disabled={isSubmitting}
-                  className={`flex flex-col items-center p-6 md:p-8 rounded-3xl border-4 transition-all transform hover:scale-105 active:scale-95 shadow-sm 
-                    ${isSelected ? `border-blue-500 ${opt.color} scale-105` : `border-transparent bg-white hover:bg-slate-50`}`}
+        {/* Tipos de Respuesta */}
+        <div className="w-full px-4">
+          {currentQ?.type === 'rating' && (
+            <div className="flex flex-wrap justify-center gap-4 md:gap-8">
+              {RATING_OPTIONS.map(opt => (
+                <button 
+                  key={opt.value} 
+                  onClick={() => handleAnswer(opt.value)} 
+                  disabled={isSubmitting} 
+                  className="flex flex-col items-center p-5 md:p-10 bg-white/95 rounded-[2.5rem] border-4 border-transparent hover:border-blue-500 hover:scale-110 active:scale-95 transition-all shadow-xl group"
                 >
-                  <span className="text-6xl md:text-8xl mb-4 select-none">{opt.emoji}</span>
-                  <span className={`text-base md:text-xl font-bold ${isSelected ? 'text-inherit' : 'text-slate-600'}`}>{opt.label}</span>
+                  <span className="text-7xl md:text-9xl mb-4 select-none group-hover:drop-shadow-lg">{opt.emoji}</span>
+                  <span className="font-black text-slate-500 group-hover:text-blue-600 uppercase text-[10px] md:text-xs tracking-[0.2em]">{opt.label}</span>
                 </button>
-              );
-            })}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
 
-        {/* Tipo: CHOICE */}
-        {currentQ?.type === 'choice' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-2xl">
-            {currentQ.options?.map((opt, i) => {
-              const isSelected = answers[currentQ.id] === opt;
-              return (
-                <button
-                  key={i}
-                  onClick={() => handleAnswer(opt)}
-                  disabled={isSubmitting}
-                  className={`py-6 px-8 rounded-2xl text-xl font-medium transition-all shadow-sm border-2 
-                    ${isSelected ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-slate-200 text-slate-700 hover:border-blue-300 hover:bg-slate-50'}`}
+          {currentQ?.type === 'choice' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-2xl mx-auto">
+              {currentQ.options?.map((opt, i) => (
+                <button 
+                  key={i} 
+                  onClick={() => handleAnswer(opt)} 
+                  className="py-8 px-10 bg-white/95 border-2 border-white rounded-[2rem] text-xl md:text-2xl font-black text-slate-700 hover:bg-blue-600 hover:text-white hover:scale-105 active:scale-95 transition-all shadow-lg"
                 >
                   {opt}
                 </button>
-              )
-            })}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
 
-        {/* Tipo: TEXT */}
-        {currentQ?.type === 'text' && (
-          <div className="w-full max-w-2xl flex flex-col items-end">
-            <textarea
-              autoFocus
-              rows={4}
-              value={answers[currentQ.id] || ''}
-              onChange={e => setAnswers(prev => ({...prev, [currentQ.id]: e.target.value}))}
-              placeholder="Escribe tu respuesta aquí..."
-              className="w-full p-6 text-xl rounded-2xl border-2 border-slate-200 focus:border-blue-500 outline-none resize-none mb-6 shadow-sm"
-            />
-            <button 
-              onClick={handleNextText} 
-              disabled={isSubmitting}
-              className="bg-slate-900 text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-slate-800 transition-colors shadow-md"
-            >
-              {getNextIndex(currentStep, answers) !== -1 ? 'Siguiente Pregunta' : 'Finalizar Encuesta'}
-            </button>
-          </div>
-        )}
-
+          {currentQ?.type === 'text' && (
+            <div className="max-w-2xl mx-auto flex flex-col items-center">
+              <textarea 
+                autoFocus 
+                rows={4} 
+                value={answers[currentQ.id] || ''} 
+                onChange={e => setAnswers({ ...answers, [currentQ.id]: e.target.value })} 
+                placeholder="Escribe tu opinión aquí..." 
+                className="w-full p-8 text-2xl md:text-3xl rounded-[2rem] border-0 bg-white/95 outline-none focus:ring-4 focus:ring-blue-500/20 shadow-2xl placeholder:text-slate-300 font-medium" 
+              />
+              <button 
+                onClick={() => { const n = getNextIndex(currentStep, answers); if (n !== -1) setCurrentStep(n); else handleSubmit(answers); }} 
+                className="mt-10 bg-slate-900 text-white px-12 py-6 rounded-3xl font-black text-2xl shadow-2xl hover:bg-blue-600 hover:scale-105 active:scale-95 transition-all"
+              >
+                Siguiente
+              </button>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Botón Salir flotante (Solo Admin) */}
+      {!window.location.search && (
+        <button 
+          onClick={() => { window.history.pushState({}, '', window.location.pathname); setRoute('admin'); }} 
+          className="fixed bottom-10 right-10 p-4 bg-white/30 hover:bg-white/80 rounded-full transition-all text-slate-400 hover:text-slate-800 z-50 backdrop-blur-sm shadow-sm"
+        >
+           <LogOut className="w-6 h-6" />
+        </button>
+      )}
     </div>
   );
 }
 
-// ============================================================================
-// 6. PANEL DE ESTADÍSTICAS Y AI (STATS VIEW)
-// ============================================================================
-function StatsView({ campaignId, campaigns, responses, callGeminiAPI, setRoute }) {
+function StatsView({ campaignId, campaigns, companies, responses, callGeminiAPI, setRoute }) {
   const campaign = campaigns.find(c => c.id === campaignId);
   const campResponses = responses.filter(r => r.campaignId === campaignId);
-  
   const [aiInsight, setAiInsight] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
-
   if (!campaign) return null;
+  const parentComp = companies.find(c => c.id === campaign.companyId);
 
-  // Lógica para Generar Insights Generales de toda la campaña
   const handleGenerateAI = async () => {
     setIsGenerating(true);
-    // Extraer datos relevantes para la IA
     const summary = campResponses.map(r => r.answers);
-    const prompt = `Analiza los siguientes datos de una encuesta llamada "${campaign.title}". Las preguntas eran: ${JSON.stringify(campaign.questions.map(q=>q.title))}. Las respuestas recopiladas son: ${JSON.stringify(summary)}. 
-    Dame un resumen ejecutivo de 1 párrafo destacando lo más positivo y lo más negativo, seguido de 3 viñetas concretas de acción para mejorar. Responde en español y usa formato markdown simple.`;
-    
-    const res = await callGeminiAPI(prompt);
-    if(res) setAiInsight(res);
-    setIsGenerating(false);
-  };
-
-  return (
-    <div className="max-w-6xl mx-auto animate-in fade-in">
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
-        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200 hover:bg-slate-50"><ChevronLeft className="w-5 h-5" /></button>
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">{campaign.title}</h1>
-          <p className="text-slate-500">Reporte de Resultados • {campResponses.length} respuestas totales</p>
-        </div>
-      </div>
-
-      {/* Sección AI */}
-      <div className="mb-8">
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-1 shadow-md">
-          <div className="bg-white rounded-xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="w-6 h-6 text-indigo-500" />
-                <h2 className="text-2xl font-bold text-slate-800">Consultor AI de Campaña</h2>
-              </div>
-              <p className="text-slate-600">Deja que Gemini analice todas las respuestas complejas, cruce los datos y te dé un diagnóstico accionable en segundos.</p>
-            </div>
-            <button 
-              onClick={handleGenerateAI}
-              disabled={isGenerating || campResponses.length === 0}
-              className="whitespace-nowrap flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-xl font-bold transition-colors disabled:opacity-50"
-            >
-              {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin"/> Procesando...</> : <><Bot className="w-5 h-5"/> Analizar Campaña Completa</>}
-            </button>
-          </div>
-        </div>
-
-        {aiInsight && (
-          <div className="mt-4 bg-indigo-50 border border-indigo-100 rounded-2xl p-6 md:p-8 shadow-sm">
-            <h3 className="font-bold text-indigo-900 mb-4 flex items-center gap-2"><Bot className="w-5 h-5"/> Diagnóstico Inteligente</h3>
-            <div className="prose prose-indigo max-w-none text-slate-700 leading-relaxed whitespace-pre-wrap">
-              {aiInsight.split('**').map((chunk, i) => i % 2 === 1 ? <strong key={i}>{chunk}</strong> : chunk)}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Desglose por pregunta */}
-      <h2 className="text-2xl font-bold mb-6 text-slate-800">Desglose por Pregunta</h2>
-      {campaign.questions?.map((q, idx) => {
-        
-        // Calcular estadísticas básicas si es rating o choice
-        let stats = {};
-        if (q.type === 'rating' || q.type === 'choice') {
-           campResponses.forEach(r => {
-             const val = r.answers[q.id];
-             if(val) stats[val] = (stats[val] || 0) + 1;
-           });
-        }
-
-        return (
-          <div key={q.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm mb-6">
-            <h3 className="text-lg font-bold text-slate-800 mb-4"><span className="text-blue-500 mr-2">Q{idx+1}.</span> {q.title}</h3>
-            
-            {q.type === 'rating' && (
-              <div className="space-y-3">
-                {[5,4,3,2,1].map(r => {
-                   const count = stats[r] || 0;
-                   const pct = campResponses.length ? (count/campResponses.length)*100 : 0;
-                   const opt = RATING_OPTIONS.find(o=>o.value===r);
-                   return (
-                     <div key={r} className="flex items-center gap-4">
-                       <span className="text-2xl w-8 text-center">{opt.emoji}</span>
-                       <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
-                         <div className={`h-full ${r>=4?'bg-green-500':r===3?'bg-yellow-400':'bg-red-500'}`} style={{width: `${pct}%`}}></div>
-                       </div>
-                       <span className="w-16 text-right font-bold text-sm text-slate-600">{count} votos</span>
-                     </div>
-                   );
-                })}
-              </div>
-            )}
-
-            {q.type === 'choice' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {q.options?.map(opt => {
-                   const count = stats[opt] || 0;
-                   return (
-                     <div key={opt} className="bg-slate-50 border border-slate-100 p-4 rounded-xl flex justify-between items-center">
-                       <span className="font-medium text-slate-700">{opt}</span>
-                       <span className="bg-white px-3 py-1 rounded-lg text-sm font-bold shadow-sm">{count}</span>
-                     </div>
-                   )
-                })}
-              </div>
-            )}
-
-            {q.type === 'text' && (
-              <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
-                {campResponses.filter(r => r.answers[q.id]).length === 0 && <p className="text-slate-400 italic text-sm">No hay respuestas escritas aún.</p>}
-                {campResponses.filter(r => r.answers[q.id]).map((r, i) => (
-                  <div key={i} className="bg-slate-50 p-4 rounded-xl text-slate-700 text-sm border border-slate-100">
-                    "{r.answers[q.id]}"
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-    </div>
-  );
-}
-
-// ============================================================================
-// 7. PANEL DE ESTADÍSTICAS GLOBALES (GLOBAL STATS VIEW)
-// ============================================================================
-function GlobalStatsView({ user, campaigns, responses, callGeminiAPI, setRoute }) {
-  const [aiInsight, setAiInsight] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const myCampaigns = campaigns.filter(c => c.ownerId === user.uid);
-  const myResponses = responses.filter(r => myCampaigns.some(c => c.id === r.campaignId));
-
-  // Calcular estadísticas globales
-  let totalRatingSum = 0;
-  let totalRatingCount = 0;
-  const ratingCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-
-  myResponses.forEach(res => {
-    const camp = myCampaigns.find(c => c.id === res.campaignId);
-    if (camp && camp.questions) {
-      camp.questions.forEach(q => {
-        // Solo promediamos las preguntas de tipo 'rating' (caritas)
-        if (q.type === 'rating' && res.answers[q.id]) {
-          totalRatingSum += res.answers[q.id];
-          totalRatingCount++;
-          ratingCounts[res.answers[q.id]] = (ratingCounts[res.answers[q.id]] || 0) + 1;
-        }
-      });
-    }
-  });
-
-  const avgRating = totalRatingCount > 0 ? (totalRatingSum / totalRatingCount).toFixed(1) : 0;
-
-  // Generar Insights Globales
-  const handleGenerateGlobalAI = async () => {
-    setIsGenerating(true);
-    
-    // Le pasamos un resumen compacto a la IA para no saturarla con datos crudos
-    const summary = {
-      total_campañas: myCampaigns.length,
-      total_respuestas: myResponses.length,
-      promedio_satisfaccion_global: avgRating,
-      distribucion_calificaciones: ratingCounts
-    };
-
-    const prompt = `Actúa como un director de operaciones. Analiza las métricas globales de satisfacción de todas las sucursales/campañas de mi empresa: ${JSON.stringify(summary)}. 
-    Dame un diagnóstico general de la salud del negocio en 2 oraciones, y luego enumera 3 estrategias clave a nivel macro para mantener o mejorar este promedio de satisfacción. Responde en español y usa formato markdown simple.`;
-    
+    const prompt = `Analiza los siguientes datos de la encuesta "${campaign.title}". Preguntas: ${JSON.stringify(campaign.questions.map(q => q.title))}. Respuestas: ${JSON.stringify(summary)}. Resume lo mejor y lo peor y da 3 consejos específicos. En español.`;
     const res = await callGeminiAPI(prompt);
     if (res) setAiInsight(res);
     setIsGenerating(false);
   };
 
   return (
-    <div className="max-w-6xl mx-auto animate-in fade-in">
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
-        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200 hover:bg-slate-50 transition-colors">
-          <ChevronLeft className="w-5 h-5" />
+    <div className="max-w-6xl mx-auto animate-in fade-in pb-20">
+      <div className="flex items-center justify-between mb-8 gap-4">
+        <div className="flex items-center gap-4">
+          <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200"><ChevronLeft className="w-5 h-5" /></button>
+          <div><h1 className="text-2xl md:text-3xl font-bold">{campaign.title}</h1><p className="text-slate-500 text-sm">Resumen de {campResponses.length} respuestas</p></div>
+        </div>
+        <button onClick={handleGenerateAI} disabled={isGenerating || campResponses.length === 0} className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow-md hover:bg-indigo-700 transition-colors flex items-center gap-2">
+           {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />} Analizar con IA
         </button>
-        <div>
-          <h1 className="text-3xl font-bold text-slate-800">Estadísticas Globales</h1>
-          <p className="text-slate-500">Resumen consolidado de todas tus campañas</p>
-        </div>
       </div>
-
-      {/* Tarjetas de Resumen Global */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-6">
-          <div className="p-4 bg-blue-50 rounded-xl">
-            <ListPlus className="w-8 h-8 text-blue-500" />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500 font-medium uppercase tracking-wider">Campañas Activas</p>
-            <p className="text-3xl font-bold text-slate-800">{myCampaigns.length}</p>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-6">
-          <div className="p-4 bg-indigo-50 rounded-xl">
-            <BarChart3 className="w-8 h-8 text-indigo-500" />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500 font-medium uppercase tracking-wider">Total Respuestas</p>
-            <p className="text-3xl font-bold text-slate-800">{myResponses.length}</p>
-          </div>
-        </div>
-        
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-6">
-          <div className={`p-4 rounded-xl ${avgRating >= 4 ? 'bg-green-50 text-green-600' : avgRating >= 3 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>
-            <span className="text-3xl">{avgRating >= 4 ? '🤩' : avgRating >= 3 ? '😐' : '🙁'}</span>
-          </div>
-          <div>
-            <p className="text-sm text-slate-500 font-medium uppercase tracking-wider">Promedio Global</p>
-            <div className="flex items-baseline gap-2">
-              <p className="text-3xl font-bold text-slate-800">{avgRating}</p>
-              <span className="text-slate-500 font-medium">/ 5.0</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Sección AI Global */}
-      <div className="mb-8">
-        <div className="bg-slate-900 rounded-2xl p-1 shadow-md">
-          <div className="bg-white rounded-xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="w-6 h-6 text-slate-800" />
-                <h2 className="text-2xl font-bold text-slate-800">Directorio de Inteligencia (Macro)</h2>
-              </div>
-              <p className="text-slate-600">Analiza la tendencia general de tu negocio en todas tus sucursales y puntos de contacto.</p>
-            </div>
-            <button 
-              onClick={handleGenerateGlobalAI}
-              disabled={isGenerating || myResponses.length === 0}
-              className="whitespace-nowrap flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-8 py-4 rounded-xl font-bold transition-colors disabled:opacity-50"
-            >
-              {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin"/> Procesando...</> : <><Bot className="w-5 h-5"/> Análisis Global AI</>}
-            </button>
-          </div>
-        </div>
-
-        {aiInsight && (
-          <div className="mt-4 bg-slate-50 border border-slate-200 rounded-2xl p-6 md:p-8 shadow-sm">
-            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Bot className="w-5 h-5"/> Estrategia Global</h3>
-            <div className="prose prose-slate max-w-none text-slate-700 leading-relaxed whitespace-pre-wrap">
-              {aiInsight.split('**').map((chunk, i) => i % 2 === 1 ? <strong key={i}>{chunk}</strong> : chunk)}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Distribución Global de Calificaciones */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm mb-6">
-        <h3 className="text-lg font-bold text-slate-800 mb-6">Distribución Global de Calificaciones</h3>
-        <div className="space-y-4">
-          {[5,4,3,2,1].map(r => {
-              const count = ratingCounts[r] || 0;
-              const pct = totalRatingCount ? (count / totalRatingCount) * 100 : 0;
-              const opt = RATING_OPTIONS.find(o => o.value === r);
-              return (
-                <div key={r} className="flex items-center gap-4">
-                  <span className="text-2xl w-8 text-center">{opt.emoji}</span>
-                  <div className="flex-1 h-4 bg-slate-100 rounded-full overflow-hidden">
-                    <div className={`h-full transition-all duration-1000 ${r >= 4 ? 'bg-green-500' : r === 3 ? 'bg-yellow-400' : 'bg-red-500'}`} style={{ width: `${pct}%` }}></div>
-                  </div>
-                  <span className="w-20 text-right font-bold text-sm text-slate-600">{count} votos</span>
+      {aiInsight && <div className="mb-8 p-6 bg-indigo-50 border border-indigo-100 rounded-3xl text-indigo-900 prose prose-indigo max-w-none shadow-sm animate-in slide-in-from-top-4">{aiInsight}</div>}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {campaign.questions.map((q, idx) => {
+          let counts = {};
+          if (q.type === 'rating' || q.type === 'choice') campResponses.forEach(r => { const v = r.answers[q.id]; if (v) counts[v] = (counts[v] || 0) + 1; });
+          return (
+            <div key={q.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-700 mb-4">{idx + 1}. {q.title}</h3>
+              {q.type === 'rating' ? (
+                <div className="space-y-2">
+                  {[5, 4, 3, 2, 1].map(r => {
+                    const c = counts[r] || 0; const pct = campResponses.length ? (c / campResponses.length) * 100 : 0;
+                    return (
+                      <div key={r} className="flex items-center gap-2">
+                        <span className="w-4 text-xs font-bold text-slate-400">{r}</span>
+                        <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full ${r >= 4 ? 'bg-green-500' : r === 3 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{ width: `${pct}%` }}></div></div>
+                        <span className="text-[10px] font-bold w-12 text-right text-slate-500">{c} ({pct.toFixed(0)}%)</span>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-          })}
+              ) : q.type === 'choice' ? (
+                <div className="space-y-1">{q.options?.map(opt => (<div key={opt} className="flex justify-between text-xs py-2 border-b border-slate-50 text-slate-600"><span className="flex-1 pr-2">{opt}</span><span className="font-bold">{counts[opt] || 0}</span></div>))}</div>
+              ) : (<div className="max-h-48 overflow-y-auto space-y-2 pr-2">{campResponses.filter(r => r.answers[q.id]).map((r, i) => (<div key={i} className="text-[10px] p-2 bg-slate-50 rounded-xl italic text-slate-600 border border-slate-100">"{r.answers[q.id]}"</div>))}</div>)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GlobalStatsView({ user, campaigns, companies, responses, callGeminiAPI, setRoute }) {
+  const myCampaigns = campaigns.filter(c => c.ownerId === user.uid);
+  const myResponses = responses.filter(r => myCampaigns.some(c => c.id === r.campaignId));
+  let totalRatingSum = 0; let totalRatingCount = 0;
+  myResponses.forEach(res => {
+    const camp = myCampaigns.find(c => c.id === res.campaignId);
+    camp?.questions?.forEach(q => { if (q.type === 'rating' && res.answers[q.id]) { totalRatingSum += res.answers[q.id]; totalRatingCount++; } });
+  });
+  const avg = totalRatingCount > 0 ? (totalRatingSum / totalRatingCount).toFixed(1) : 0;
+
+  return (
+    <div className="max-w-6xl mx-auto animate-in fade-in pb-10">
+      <div className="flex items-center gap-4 mb-8">
+        <button onClick={() => setRoute('admin')} className="p-2 bg-white rounded-lg shadow-sm border border-slate-200 hover:bg-slate-50"><ChevronLeft className="w-5 h-5" /></button>
+        <h1 className="text-3xl font-bold">Estadísticas Globales</h1>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm text-center">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Campañas</p><p className="text-5xl font-black text-slate-800">{myCampaigns.length}</p>
+        </div>
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm text-center">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Respuestas Totales</p><p className="text-5xl font-black text-slate-800">{myResponses.length}</p>
+        </div>
+        <div className="bg-blue-600 p-8 rounded-3xl shadow-lg text-center text-white">
+          <p className="text-xs font-bold text-blue-200 uppercase tracking-widest mb-2">Promedio General</p><p className="text-5xl font-black">{avg} <span className="text-xl">/ 5</span></p>
         </div>
       </div>
-
     </div>
   );
 }
